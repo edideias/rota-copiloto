@@ -1,0 +1,20 @@
+ROTA COPILOTO - como gerar o APK de graca (GitHub Actions)
+
+1. No computador, entre em github.com > botao "+" > New repository.
+   Nome: rota-copiloto. Deixe PRIVADO se quiser. Create repository.
+2. Descompacte este zip. Na pagina do repositorio: "uploading an existing file".
+   Arraste PARA DENTRO a pasta "app" e os arquivos build.gradle.kts,
+   settings.gradle.kts e gradle.properties. Clique em Commit changes.
+3. Crie o arquivo do compilador: Add file > Create new file.
+   Nome (digite exatamente): .github/workflows/build.yml
+   Cole o conteudo do arquivo build.yml que esta dentro de .github/workflows/
+   neste zip. Commit changes.
+4. Aba "Actions": o "Compilar APK" roda sozinho (3 a 6 minutos).
+   Quando ficar verde, clique nele > Artifacts > RotaCopiloto-apk (baixa um zip com o app-debug.apk).
+5. Mande o APK pro celular, abra e instale (permita "fontes desconhecidas").
+6. No app: passo 1 (ativar leitura), passo 2 (testar painel).
+   Se o Android bloquear: Configuracoes > Apps > Rota Copiloto > menu de 3 pontos >
+   "Permitir configuracoes restritas".
+
+Se der erro vermelho no Actions, abra o job e me mande o texto do erro.
+Se o painel nao aparecer numa corrida real, use "Copiar log" dentro do app e me mande.

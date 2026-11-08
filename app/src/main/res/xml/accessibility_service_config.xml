@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Serviço SOMENTE LEITURA: não declara canPerformGestures e o código nunca chama
+  performAction. Ele não consegue tocar, rolar nem aceitar nada em outro app.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagIncludeNotImportantViews"
+    android:canRetrieveWindowContent="true"
+    android:notificationTimeout="200"
+    android:packageNames="com.ubercab.driver,com.app99.driver"
+    android:description="@string/service_description" />
