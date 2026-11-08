@@ -29,3 +29,8 @@ android {
         jvmTarget = "17"
     }
 }
+
+dependencies {
+    // Leitura por imagem (OCR) 100% no aparelho, modelo embutido no app.
+    implementation("com.google.mlkit:text-recognition:16.0.1")
+}

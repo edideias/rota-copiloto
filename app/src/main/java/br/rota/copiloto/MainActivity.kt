@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var swEnabled: Switch
     private lateinit var swUber: Switch
     private lateinit var sw99: Switch
+    private lateinit var swOcr: Switch
 
     private val bgColor = Color.parseColor("#101418")
     private val cardColor = Color.parseColor("#1B2128")
@@ -93,7 +94,12 @@ class MainActivity : Activity() {
         swEnabled = switch("Painel ligado", prefs.enabled)
         swUber = switch("Ler Uber Driver", prefs.useUber)
         sw99 = switch("Ler 99 Motorista", prefs.use99)
-        col.addView(swEnabled); col.addView(swUber); col.addView(sw99)
+        swOcr = switch("Leitura por imagem (quando o app não entrega o texto)", prefs.useOcr)
+        col.addView(swEnabled); col.addView(swUber); col.addView(sw99); col.addView(swOcr)
+        col.addView(text(
+            "A leitura por imagem tira uma foto da tela só enquanto o Uber/99 está aberto, lê os números no próprio celular e descarta a imagem. Nada é salvo nem enviado.",
+            12f, mutedColor
+        ))
 
         col.addView(button("Salvar") { save() })
         col.addView(button("2) Testar painel (oferta falsa)") {
@@ -154,6 +160,7 @@ class MainActivity : Activity() {
         prefs.enabled = swEnabled.isChecked
         prefs.useUber = swUber.isChecked
         prefs.use99 = sw99.isChecked
+        prefs.useOcr = swOcr.isChecked
         Toast.makeText(this, "Salvo.", Toast.LENGTH_SHORT).show()
     }
 
@@ -165,6 +172,8 @@ class MainActivity : Activity() {
                     "Uber Driver e do 99 Motorista e mostra uma análise. Ele não aceita, não recusa e não toca em nada.\n\n" +
                     "Não é afiliado, aprovado ou mantido pela Uber nem pela 99. Os números são estimativas; " +
                     "a decisão de aceitar a corrida é sempre sua.\n\n" +
+                    "Quando o app não entrega o texto da tela, o Rota Copiloto lê os números por imagem, só enquanto o Uber/99 está aberto. " +
+                    "A imagem é analisada no próprio celular e descartada.\n\n" +
                     "Nada sai do seu celular: não há login nem servidor."
             )
             .setCancelable(false)

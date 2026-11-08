@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Rota Copiloto</string>
-    <string name="service_description">Lê os valores da oferta de corrida na tela do Uber Driver e do 99 Motorista e mostra um painel com o cálculo de ganho por km e por hora. Não aceita, não recusa e não toca em nada.</string>
+    <string name="service_description">Lê os valores da oferta de corrida na tela do Uber Driver e do 99 Motorista (por texto ou por imagem, só no seu celular) e mostra um painel com o cálculo de ganho por km e por hora. Não aceita, não recusa e não toca em nada.</string>
 </resources>

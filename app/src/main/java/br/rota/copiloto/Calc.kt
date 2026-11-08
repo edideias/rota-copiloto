@@ -78,6 +78,9 @@ class Prefs(ctx: Context) {
     var use99: Boolean
         get() = sp.getBoolean("use99", true)
         set(v) { sp.edit().putBoolean("use99", v).apply() }
+    var useOcr: Boolean
+        get() = sp.getBoolean("useOcr", true)
+        set(v) { sp.edit().putBoolean("useOcr", v).apply() }
     var termsAccepted: Boolean
         get() = sp.getBoolean("termsAccepted", false)
         set(v) { sp.edit().putBoolean("termsAccepted", v).apply() }

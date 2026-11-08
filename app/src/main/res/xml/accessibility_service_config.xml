@@ -3,11 +3,13 @@
   Serviço SOMENTE LEITURA: não declara canPerformGestures e o código nunca chama
   performAction. Ele não consegue tocar, rolar nem aceitar nada em outro app.
   O código ignora qualquer app que não seja Uber Driver / 99 Motorista.
+  canTakeScreenshot: usado só para ler os números da oferta por imagem (OCR local).
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
     android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewTextChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
     android:notificationTimeout="100"
     android:description="@string/service_description" />

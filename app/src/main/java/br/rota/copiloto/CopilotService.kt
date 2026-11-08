@@ -1,13 +1,16 @@
 package br.rota.copiloto
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
@@ -15,6 +18,9 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import java.util.Locale
 
 /**
@@ -72,27 +78,116 @@ class CopilotService : AccessibilityService() {
         if (now - lastRun < 250) return
         lastRun = now
 
-        val root = findRoot(pkg, event)
-        if (root == null) {
-            diag("[$platform] pkg=$pkg: não consegui abrir a janela do app")
-            return
-        }
-
-        val texts = ArrayList<String>()
-        collect(root, texts, 0)
-        if (texts.isEmpty()) {
-            diag("[$platform] pkg=$pkg: janela aberta, mas SEM NENHUM TEXTO (o app não expõe a tela)")
-            return
-        }
+        // 1) Texto de todas as janelas do app (a oferta pode ficar numa janela separada).
+        val texts = gatherTexts(pkg, event)
         val joined = texts.joinToString(" | ")
+        if (texts.isEmpty()) {
+            diag("[$platform] pkg=$pkg: nenhum texto legível nas janelas do app")
+        } else {
+            logSnapshot(platform, joined)
+            if (!REQUIRE_OFFER_BUTTON || hasOfferButton(joined)) {
+                val offer = OfferParser.parse(platform, joined)
+                if (offer != null) {
+                    show(Calc.analyze(offer, prefs), HIDE_AFTER_MS)
+                    return
+                }
+            }
+        }
 
-        logSnapshot(platform, joined)
+        // 2) Plano B: lê a oferta por imagem (OCR no próprio aparelho).
+        if (prefs.useOcr) tryOcr(platform)
+    }
 
-        if (REQUIRE_OFFER_BUTTON && !hasOfferButton(joined)) return
+    // ---------- leitura por imagem (OCR) ----------
+
+    private var lastOcr = 0L
+    private var lastOcrLog = 0L
+    private var ocrBusy = false
+    private var ocrAnnounced = false
+    private val recognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
+
+    private fun tryOcr(platform: String) {
+        if (Build.VERSION.SDK_INT < 30) {
+            diag("Leitura por imagem exige Android 11 ou mais novo.")
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        if (ocrBusy && now - lastOcr > 6000) ocrBusy = false
+        if (ocrBusy || now - lastOcr < 1200) return
+        lastOcr = now
+        ocrBusy = true
+        if (!ocrAnnounced) {
+            ocrAnnounced = true
+            DebugLog.add("Leitura por imagem (OCR) ligada.")
+        }
+        try {
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                mainExecutor,
+                object : AccessibilityService.TakeScreenshotCallback {
+                    override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                        try {
+                            val hb = result.hardwareBuffer
+                            val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace)
+                            if (hw == null) {
+                                hb.close()
+                                ocrBusy = false
+                                diag("OCR: não consegui montar a imagem da tela")
+                                return
+                            }
+                            val bmp = hw.copy(Bitmap.Config.ARGB_8888, false)
+                            hw.recycle()
+                            hb.close()
+                            if (bmp == null) {
+                                ocrBusy = false
+                                return
+                            }
+                            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                                .addOnSuccessListener { t ->
+                                    ocrBusy = false
+                                    onOcrText(platform, t.text)
+                                }
+                                .addOnFailureListener { e ->
+                                    ocrBusy = false
+                                    diag("OCR falhou: ${e.message}")
+                                }
+                        } catch (e: Exception) {
+                            ocrBusy = false
+                            diag("OCR erro: ${e.message}")
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        ocrBusy = false
+                        diag("Screenshot recusado (código $errorCode). Se for 5, o app bloqueia captura de tela.")
+                    }
+                }
+            )
+        } catch (e: Exception) {
+            ocrBusy = false
+            diag("OCR não iniciou: ${e.message}")
+        }
+    }
+
+    private fun onOcrText(platform: String, raw: String) {
+        // Tira o que o próprio painel desenhou, para não ler a si mesmo.
+        val lines = raw.split("\n").filter { l ->
+            val s = l.lowercase()
+            !(s.contains("lucro est") ||
+                (s.contains("/km") && s.contains("/h")) ||
+                s.contains("vale a pena") || s.contains("no limite") || s.contains("não compensa"))
+        }
+        val joined = lines.joinToString(" | ")
+
+        val t = SystemClock.uptimeMillis()
+        if (joined.contains("km", ignoreCase = true) && t - lastOcrLog > 3000) {
+            lastOcrLog = t
+            DebugLog.add("[$platform] OCR: ${joined.take(600)}")
+        }
 
         val offer = OfferParser.parse(platform, joined) ?: return
-        val analysis = Calc.analyze(offer, prefs)
-        show(analysis, HIDE_AFTER_MS)
+        if (!(hasOfferButton(joined) || offer.pickupKm > 0.0)) return
+        show(Calc.analyze(offer, prefs), HIDE_AFTER_MS)
     }
 
     override fun onInterrupt() {}
@@ -131,15 +226,22 @@ class CopilotService : AccessibilityService() {
         }
     }
 
-    private fun findRoot(pkg: String, event: AccessibilityEvent): AccessibilityNodeInfo? {
-        rootInActiveWindow?.let { if (it.packageName?.toString() == pkg) return it }
+    /** Junta os textos de TODAS as janelas do app (a oferta pode estar numa janela separada). */
+    private fun gatherTexts(pkg: String, event: AccessibilityEvent): List<String> {
+        val out = ArrayList<String>()
+        val seenWindows = HashSet<Int>()
+        fun addRoot(r: AccessibilityNodeInfo?) {
+            if (r == null || r.packageName?.toString() != pkg) return
+            if (!seenWindows.add(r.windowId)) return
+            collect(r, out, 0)
+        }
+        addRoot(rootInActiveWindow)
         try {
-            for (w in windows) {
-                val r = w.root ?: continue
-                if (r.packageName?.toString() == pkg) return r
-            }
-        } catch (_: Exception) {}
-        return event.source
+            for (w in windows) addRoot(w.root)
+        } catch (_: Exception) {
+        }
+        if (out.isEmpty()) event.source?.let { collect(it, out, 0) }
+        return out
     }
 
     private var lastDiag = 0L
