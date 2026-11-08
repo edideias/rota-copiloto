@@ -46,13 +46,12 @@ class CopilotService : AccessibilityService() {
         private fun hasOfferButton(text: String): Boolean =
             OFFER_BUTTON_WORDS.any { text.contains(it, ignoreCase = true) }
 
-        private const val HIDE_AFTER_MS = 2500L
     }
 
     private lateinit var prefs: Prefs
     private lateinit var wm: WindowManager
     private val handler = Handler(Looper.getMainLooper())
-    private val hideRunnable = Runnable { hide() }
+    private val hideRunnable = Runnable { dismiss() }
 
     private var lastRun = 0L
     private var lastSnapshot = ""
@@ -92,7 +91,7 @@ class CopilotService : AccessibilityService() {
             if (!REQUIRE_OFFER_BUTTON || hasOfferButton(joined)) {
                 val offer = OfferParser.parse(platform, joined)
                 if (offer != null) {
-                    show(Calc.analyze(offer, prefs), HIDE_AFTER_MS)
+                    show(Calc.analyze(offer, prefs), -1L)
                     return
                 }
             }
@@ -257,7 +256,7 @@ class CopilotService : AccessibilityService() {
 
         val offer = OfferParser.parse(platform, joined) ?: return
         if (!(hasOfferButton(joined) || offer.pickupKm > 0.0)) return
-        show(Calc.analyze(offer, prefs), HIDE_AFTER_MS)
+        show(Calc.analyze(offer, prefs), -1L)
     }
 
     override fun onInterrupt() {}
@@ -360,11 +359,36 @@ class CopilotService : AccessibilityService() {
     private var lastOfferKey = ""
     private var lastOfferAt = 0L
 
+    private var shownKey = ""
+    private var dismissedKey = ""
+    private var dismissedAt = 0L
+
+    /** Fecha o quadro (por tempo ou por toque) e não deixa a mesma oferta reaparecer logo em seguida. */
+    private fun dismiss() {
+        dismissedKey = shownKey
+        dismissedAt = SystemClock.uptimeMillis()
+        hide()
+    }
+
+    /** holdMs < 0 usa o tempo configurado (0 = até tocar, no máximo 60 s). */
     private fun show(a: Analysis, holdMs: Long) {
         try {
+            val o = a.offer
+            val key = "${o.platform}|${o.value}|${o.pickupKm}|${o.tripKm}"
+            val now = SystemClock.uptimeMillis()
+            val simulated = holdMs >= 0
+            if (simulated) {
+                dismissedKey = ""
+            } else {
+                if (key == dismissedKey && now - dismissedAt < 30000) return
+                if (attached && key == shownKey) return // mesma oferta, já na tela
+            }
+            shownKey = key
+
             val box = overlay ?: FrameLayout(this).also { overlay = it }
             box.removeAllViews()
             box.addView(OverlayCard.build(this, a, prefs))
+            box.setOnClickListener { dismiss() }
 
             var lp = overlayLp
             if (lp == null) {
@@ -373,7 +397,7 @@ class CopilotService : AccessibilityService() {
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
                     WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
+                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                     PixelFormat.TRANSLUCENT
                 )
@@ -392,8 +416,9 @@ class CopilotService : AccessibilityService() {
             } else {
                 wm.updateViewLayout(box, lp)
             }
+            val hold = if (simulated) holdMs else (if (prefs.holdSec <= 0) 60000L else prefs.holdSec * 1000L)
             handler.removeCallbacks(hideRunnable)
-            handler.postDelayed(hideRunnable, holdMs)
+            handler.postDelayed(hideRunnable, hold)
             onOffer(a)
         } catch (e: Exception) {
             DebugLog.add("Erro ao mostrar painel: ${e.message}")

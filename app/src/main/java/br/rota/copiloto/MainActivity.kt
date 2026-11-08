@@ -38,7 +38,10 @@ class MainActivity : Activity() {
 
     private val stack = ArrayList<() -> View>()
     private var tab = 0
-    private val totalSteps = 10
+    private val totalSteps = 6
+
+    // rascunho das telas de configuração (só vale depois de tocar em Salvar)
+    private var draftMem: MemPrefs? = null
 
     private fun dp(v: Int) = ui.dp(v)
 
@@ -71,7 +74,9 @@ class MainActivity : Activity() {
     }
 
     override fun onBackPressed() {
-        if (stack.size > 1) {
+        if (draftMem != null) {
+            leaveConfig()
+        } else if (stack.size > 1) {
             stack.removeAt(stack.size - 1)
             render()
         } else super.onBackPressed()
@@ -156,7 +161,7 @@ class MainActivity : Activity() {
             c.addView(ui.tv("Leitura desligada", 16f, C.TEXT, 2))
             c.addView(ui.tv("Ative o Rota Copiloto em Acessibilidade para ele ler as ofertas.", 13f, C.MUTED, 0))
             c.addView(ui.button("Ativar leitura") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
-            c.addView(ui.button("Como liberar (configuração restrita)", false) { push { wizardStep(4) } })
+            c.addView(ui.button("Como liberar (configuração restrita)", false) { push { wizardStep(0) } })
             body.addView(c, ui.lp(top = 0))
         } else {
             body.addView(ui.statusPill("Leitura ativa", true), ui.lp(top = 0))
@@ -166,7 +171,7 @@ class MainActivity : Activity() {
         card.addView(
             featureRow(
                 "Copiloto", "Ative para utilizar os recursos", null, prefs.enabled,
-                { push { screen("Apps de trabalho", appsContent()) } }
+                { openConfig("Apps de trabalho") { appsContent(it) } }
             ) { v ->
                 prefs.enabled = v
                 if (v && !isServiceEnabled()) startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
@@ -179,23 +184,25 @@ class MainActivity : Activity() {
         card.addView(
             featureRow(
                 "Cálculo de Ganhos", null, chips, prefs.calcEnabled,
-                { push { screen("Metas e cartão", goalsContent() + cardContent()) } }
+                { push { configMenu() } }
             ) { v -> prefs.calcEnabled = v }
         )
         card.addView(divider())
         card.addView(
             featureRow(
                 "Captura de Tela", "Salva cada oferta na galeria", null, prefs.saveShots,
-                { push { screen("Captura de tela", captureContent()) } }
+                { openConfig("Captura de tela") { captureContent(it) } }
             ) { v -> prefs.saveShots = v }
         )
         body.addView(card, ui.lp(top = 14))
 
+        body.addView(ui.button("Configurar") { push { configMenu() } }, ui.lp(top = 16))
+
         val two = ui.hbox()
-        two.addView(ui.button("Tutorial Guiado") { push { wizardStep(0) } }, ui.lp(0, top = 0, weight = 1f))
+        two.addView(ui.button("Tutorial Guiado", false) { push { wizardStep(0) } }, ui.lp(0, top = 0, weight = 1f))
         two.addView(View(this), LinearLayout.LayoutParams(dp(12), 1))
-        two.addView(ui.button("Ajuda Xiaomi", true) { push { screen("Ajuda Xiaomi", xiaomiHelpContent()) } }, ui.lp(0, top = 0, weight = 1f))
-        body.addView(two, ui.lp(top = 16))
+        two.addView(ui.button("Ajuda Xiaomi", false) { push { screen("Ajuda Xiaomi", xiaomiHelpContent()) } }, ui.lp(0, top = 0, weight = 1f))
+        body.addView(two, ui.lp(top = 4))
 
         val mi = ActivityManager.MemoryInfo()
         (getSystemService(ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(mi)
@@ -248,19 +255,6 @@ class MainActivity : Activity() {
     private fun diagBody(body: LinearLayout) {
         body.addView(ui.tv("Diagnóstico", 20f, C.TEXT, 3))
         body.addView(ui.tv("Se o painel não aparecer numa corrida real, copie o log e mande para ajustar a leitura.", 13f, C.MUTED, 0))
-
-        val c = ui.card()
-        c.addView(
-            switchRow("Leitura por imagem (quando o app não entrega o texto)", prefs.useOcr) { prefs.useOcr = it }
-        )
-        c.addView(
-            ui.tv(
-                "A leitura por imagem tira uma foto da tela só enquanto o Uber/99 está aberto, lê os números no próprio celular e descarta a imagem.",
-                12f, C.MUTED, 0
-            ),
-            ui.lp(top = 6)
-        )
-        body.addView(c, ui.lp(top = 14))
 
         body.addView(ui.button("Testar painel (oferta falsa)") {
             val s = CopilotService.instance
@@ -326,7 +320,7 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- moldura de telas
 
-    private fun screen(title: String, content: View): View {
+    private fun screen(title: String, content: View, onBack: () -> Unit = { pop() }, bottom: View? = null): View {
         val col = ui.vbox().apply { setBackgroundColor(C.BG) }
         val bar = ui.hbox().apply {
             setBackgroundColor(C.WHITE)
@@ -334,7 +328,7 @@ class MainActivity : Activity() {
         }
         bar.addView(ui.tv("←", 24f, C.PURPLE, 2).apply {
             setPadding(0, 0, dp(16), 0)
-            setOnClickListener { pop() }
+            setOnClickListener { onBack() }
         })
         bar.addView(ui.tv(title, 18f, C.TEXT, 2))
         col.addView(bar)
@@ -343,6 +337,7 @@ class MainActivity : Activity() {
         wrap.addView(content)
         sv.addView(wrap)
         col.addView(sv, ui.lp(h = 0, weight = 1f))
+        if (bottom != null) col.addView(bottom)
         return col
     }
 
@@ -364,6 +359,74 @@ class MainActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(dp(72), dp(72)).also { it.gravity = Gravity.CENTER_HORIZONTAL }
         }
 
+    // ---------------------------------------------------------------- configurar (com Salvar)
+
+    private fun configMenu(): View {
+        val box = ui.vbox()
+        fun item(title: String, sub: String, onClick: () -> Unit) {
+            val r = ui.hbox().apply {
+                background = ui.round(C.WHITE, 18)
+                elevation = ui.dpf(2f)
+                setPadding(dp(18), dp(16), dp(14), dp(16))
+                setOnClickListener { onClick() }
+            }
+            val l = ui.vbox()
+            l.addView(ui.tv(title, 16f, C.TEXT, 2))
+            l.addView(ui.tv(sub, 12f, C.MUTED, 0))
+            r.addView(l, ui.lp(0, weight = 1f))
+            r.addView(ui.tv("›", 26f, C.PURPLE, 2))
+            box.addView(r, ui.lp(top = 12))
+        }
+        item("Apps de trabalho", "Uber, 99 e leitura por imagem") { openConfig("Apps de trabalho") { appsContent(it) } }
+        item("Metas e custo", "Ganho por km, por hora e custo do carro") { openConfig("Metas e custo") { goalsContent(it) } }
+        item("Aparência do quadro", "Métricas, posição, tema e fonte") { openConfig("Aparência do quadro") { cardContent(it) } }
+        item("Tempo na tela", "Quanto tempo o quadro fica visível") { openConfig("Tempo na tela") { timeContent(it) } }
+        item("Captura de tela", "Salvar cada oferta na galeria") { openConfig("Captura de tela") { captureContent(it) } }
+        return screen("Configurar", box)
+    }
+
+    /** Abre uma tela de configuração com rascunho: nada vale até tocar em Salvar. */
+    private fun openConfig(title: String, build: (Prefs) -> View) {
+        val mem = MemPrefs(prefs.store.all)
+        draftMem = mem
+        val d = Prefs(this, mem)
+        push { configScreen(title, d, build) }
+    }
+
+    private fun configScreen(title: String, d: Prefs, build: (Prefs) -> View): View {
+        val bar = ui.vbox().apply {
+            setBackgroundColor(C.WHITE)
+            elevation = ui.dpf(6f)
+            setPadding(dp(16), dp(8), dp(16), dp(12))
+        }
+        bar.addView(ui.button("Salvar") {
+            prefs.commitFrom(d.store)
+            draftMem = null
+            Toast.makeText(this, "Salvo.", Toast.LENGTH_SHORT).show()
+            pop()
+        })
+        return screen(title, build(d), { leaveConfig() }, bar)
+    }
+
+    private fun leaveConfig() {
+        val mem = draftMem
+        val dirty = mem != null && mem.all != prefs.store.all
+        if (!dirty) {
+            draftMem = null
+            pop()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Descartar alterações?")
+            .setMessage("Você mudou algo e não tocou em Salvar.")
+            .setPositiveButton("Descartar") { _, _ ->
+                draftMem = null
+                pop()
+            }
+            .setNegativeButton("Continuar editando", null)
+            .show()
+    }
+
     // ---------------------------------------------------------------- apps de trabalho
 
     private class AppItem(
@@ -371,10 +434,10 @@ class MainActivity : Activity() {
         val enabled: Boolean, val get: () -> Boolean, val set: (Boolean) -> Unit
     )
 
-    private fun appsContent(): View {
+    private fun appsContent(p: Prefs): View {
         val items = listOf(
-            AppItem("Uber", "UBER", Color.BLACK, Color.WHITE, true, { prefs.useUber }, { prefs.useUber = it }),
-            AppItem("99", "99", Color.parseColor("#FFD400"), Color.BLACK, true, { prefs.use99 }, { prefs.use99 = it }),
+            AppItem("Uber", "UBER", Color.BLACK, Color.WHITE, true, { p.useUber }, { p.useUber = it }),
+            AppItem("99", "99", Color.parseColor("#FFD400"), Color.BLACK, true, { p.use99 }, { p.use99 = it }),
             AppItem("Uber Moto", "MOTO", Color.parseColor("#9CA3AF"), Color.WHITE, false, { false }, {}),
             AppItem("Uber Delivery", "EATS", Color.parseColor("#9CA3AF"), Color.WHITE, false, { false }, {}),
             AppItem("99 Food", "FOOD", Color.parseColor("#9CA3AF"), Color.WHITE, false, { false }, {}),
@@ -414,12 +477,22 @@ class MainActivity : Activity() {
             repeat(3 - rowItems.size) { row.addView(View(this), ui.lp(0, weight = 1f)) }
             box.addView(row, ui.lp(top = if (idx == 0) 20 else 4))
         }
+        val ocr = ui.card()
+        ocr.addView(switchRow("Leitura por imagem (quando o app não entrega o texto)", p.useOcr) { p.useOcr = it })
+        ocr.addView(
+            ui.tv(
+                "Tira uma foto da tela só enquanto o Uber/99 está aberto, lê os números no próprio celular e descarta a imagem.",
+                12f, C.MUTED, 0
+            ),
+            ui.lp(top = 6)
+        )
+        box.addView(ocr, ui.lp(top = 16))
         return box
     }
 
     // ---------------------------------------------------------------- metas
 
-    private fun goalsContent(): View {
+    private fun goalsContent(p: Prefs): View {
         val br = Locale("pt", "BR")
         val box = ui.vbox()
         box.addView(pageHeader("Defina suas metas por km e hora", "O Rota mostra se cada corrida é boa, média ou ruim"))
@@ -430,15 +503,15 @@ class MainActivity : Activity() {
                 editDialog(
                     "Ganho por Km",
                     listOf("Ruim abaixo de (R\$/km)", "Bom a partir de (R\$/km)"),
-                    listOf(prefs.yellowKm, prefs.greenKm)
-                ) { v -> prefs.yellowKm = v[0]; prefs.greenKm = v[1] }
+                    listOf(p.yellowKm, p.greenKm)
+                ) { v -> p.yellowKm = v[0]; p.greenKm = v[1] }
             }
         )
         km.addView(
             RangeBar(
-                this, 0.5, 4.0, 0.05, prefs.yellowKm, prefs.greenKm,
+                this, 0.5, 4.0, 0.05, p.yellowKm, p.greenKm,
                 { String.format(br, "R\$ %.2f /km", it) }
-            ) { l, h -> prefs.yellowKm = l; prefs.greenKm = h }
+            ) { l, h -> p.yellowKm = l; p.greenKm = h }
         )
         box.addView(km, ui.lp(top = 20))
 
@@ -448,15 +521,15 @@ class MainActivity : Activity() {
                 editDialog(
                     "Ganho por Hora",
                     listOf("Ruim abaixo de (R\$/hora)", "Bom a partir de (R\$/hora)"),
-                    listOf(prefs.yellowHour, prefs.greenHour)
-                ) { v -> prefs.yellowHour = v[0]; prefs.greenHour = v[1] }
+                    listOf(p.yellowHour, p.greenHour)
+                ) { v -> p.yellowHour = v[0]; p.greenHour = v[1] }
             }
         )
         hr.addView(
             RangeBar(
-                this, 10.0, 100.0, 1.0, prefs.yellowHour, prefs.greenHour,
+                this, 10.0, 100.0, 1.0, p.yellowHour, p.greenHour,
                 { String.format(br, "R\$ %.0f /hr", it) }
-            ) { l, h -> prefs.yellowHour = l; prefs.greenHour = h }
+            ) { l, h -> p.yellowHour = l; p.greenHour = h }
         )
         box.addView(hr, ui.lp(top = 14))
 
@@ -466,11 +539,11 @@ class MainActivity : Activity() {
                 editDialog(
                     "Custo do carro por km",
                     listOf("Combustível + manutenção (R\$/km)"),
-                    listOf(prefs.costPerKm)
-                ) { v -> prefs.costPerKm = v[0] }
+                    listOf(p.costPerKm)
+                ) { v -> p.costPerKm = v[0] }
             }
         )
-        cost.addView(ui.tv(String.format(br, "R\$ %.2f /km", prefs.costPerKm), 22f, C.PURPLE, 3), ui.lp(top = 6))
+        cost.addView(ui.tv(String.format(br, "R\$ %.2f /km", p.costPerKm), 22f, C.PURPLE, 3), ui.lp(top = 6))
         cost.addView(ui.tv("Usado para calcular o lucro de cada corrida.", 13f, C.MUTED, 0))
         box.addView(cost, ui.lp(top = 14))
         return box
@@ -517,7 +590,7 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- cartão
 
-    private fun cardContent(): View {
+    private fun cardContent(p: Prefs): View {
         val box = ui.vbox()
         box.addView(pageHeader("Personalize o Cartão", "Escolha a posição e o tema, e ordene os indicadores do seu jeito"))
 
@@ -526,20 +599,20 @@ class MainActivity : Activity() {
             background = ui.round(C.BG, 14)
             setPadding(dp(14), dp(18), dp(14), dp(18))
         }
-        val g = when (prefs.cardPos) {
+        val g = when (p.cardPos) {
             0 -> Gravity.START
             2 -> Gravity.END
             else -> Gravity.CENTER_HORIZONTAL
         }
         prev.addView(
-            OverlayCard.build(this, OverlayCard.sample(prefs), prefs),
+            OverlayCard.build(this, OverlayCard.sample(p), p),
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.gravity = g }
         )
         c.addView(prev)
 
         c.addView(ui.tv("Ordem das métricas", 16f, C.TEXT, 2), ui.lp(top = 18))
         c.addView(ui.tv("Toque numa métrica para adicionar. Toque numa já escolhida para tirar.", 12f, C.MUTED, 0))
-        val current = prefs.metrics
+        val current = p.metrics
         val slots = ui.hbox().apply { weightSum = 4f }
         for (i in 0 until 4) {
             val key = current.getOrNull(i)
@@ -548,7 +621,7 @@ class MainActivity : Activity() {
                     background = ui.round(C.PURPLE_LIGHT, 12)
                     setOnClickListener {
                         if (current.size > 1) {
-                            prefs.metrics = current - key
+                            p.metrics = current - key
                             render()
                         }
                     }
@@ -571,7 +644,7 @@ class MainActivity : Activity() {
                         setPadding(dp(10), dp(10), dp(10), dp(10))
                         if (!used) setOnClickListener {
                             if (current.size < 4) {
-                                prefs.metrics = current + key
+                                p.metrics = current + key
                                 render()
                             } else Toast.makeText(this@MainActivity, "Máximo de 4 métricas.", Toast.LENGTH_SHORT).show()
                         }
@@ -583,16 +656,16 @@ class MainActivity : Activity() {
         }
 
         c.addView(ui.tv("Posição", 16f, C.TEXT, 2), ui.lp(top = 20))
-        c.addView(ui.segmented(listOf("Esquerda", "Centro", "Direita"), prefs.cardPos) { prefs.cardPos = it; render() }, ui.lp(top = 8))
+        c.addView(ui.segmented(listOf("Esquerda", "Centro", "Direita"), p.cardPos) { p.cardPos = it; render() }, ui.lp(top = 8))
         c.addView(ui.tv("Tema", 16f, C.TEXT, 2), ui.lp(top = 16))
-        c.addView(ui.segmented(listOf("Claro", "Escuro", "Cheio"), prefs.cardTheme) { prefs.cardTheme = it; render() }, ui.lp(top = 8))
+        c.addView(ui.segmented(listOf("Claro", "Escuro", "Cheio"), p.cardTheme) { p.cardTheme = it; render() }, ui.lp(top = 8))
 
-        c.addView(stepperRow("Tamanho da fonte", prefs.cardFont.toString(), { prefs.cardFont = prefs.cardFont - 1; render() }, { prefs.cardFont = prefs.cardFont + 1; render() }), ui.lp(top = 16))
+        c.addView(stepperRow("Tamanho da fonte", p.cardFont.toString(), { p.cardFont = p.cardFont - 1; render() }, { p.cardFont = p.cardFont + 1; render() }), ui.lp(top = 16))
         c.addView(
             stepperRow(
-                "Altura na tela", "${prefs.overlayTopDp.toInt()}",
-                { prefs.overlayTopDp = (prefs.overlayTopDp - 10).coerceAtLeast(0.0); render() },
-                { prefs.overlayTopDp = (prefs.overlayTopDp + 10).coerceAtMost(600.0); render() }
+                "Altura na tela", "${p.overlayTopDp.toInt()}",
+                { p.overlayTopDp = (p.overlayTopDp - 10).coerceAtLeast(0.0); render() },
+                { p.overlayTopDp = (p.overlayTopDp + 10).coerceAtMost(600.0); render() }
             ),
             ui.lp(top = 12)
         )
@@ -624,21 +697,54 @@ class MainActivity : Activity() {
 
     // ---------------------------------------------------------------- captura de tela
 
-    private fun captureContent(): View {
+    private fun timeContent(p: Prefs): View {
+        val box = ui.vbox()
+        box.addView(pageHeader("Tempo na tela", "Por quanto tempo o quadro de cálculo fica visível quando chega uma oferta"))
+        val opts = listOf(3, 5, 8, 10, 15, 20, 30, 0)
+        val c = ui.card()
+        c.addView(ui.tv("Ficar na tela por", 16f, C.TEXT, 2))
+        opts.chunked(4).forEach { rowOpts ->
+            val row = ui.hbox()
+            rowOpts.forEach { sec ->
+                val on = p.holdSec == sec
+                row.addView(
+                    ui.tv(if (sec == 0) "Até tocar" else "${sec}s", 13f, if (on) C.WHITE else C.PURPLE, if (on) 2 else 1, true).apply {
+                        background = ui.round(if (on) C.PURPLE else C.PURPLE_LIGHT, 12)
+                        setPadding(dp(4), dp(12), dp(4), dp(12))
+                        setOnClickListener { p.holdSec = sec; render() }
+                    },
+                    ui.lp(0, weight = 1f).also { it.setMargins(dp(3), 0, dp(3), 0) }
+                )
+            }
+            c.addView(row, ui.lp(top = 10))
+        }
+        c.addView(
+            ui.tv(
+                "Toque no quadro a qualquer momento para fechá-lo. O toque só fecha o quadro: nada acontece no Uber/99. " +
+                    "Em \"Até tocar\" ele fica até você tocar (ou até 60 segundos).",
+                12f, C.MUTED, 0
+            ),
+            ui.lp(top = 14)
+        )
+        box.addView(c, ui.lp(top = 20))
+        return box
+    }
+
+    private fun captureContent(p: Prefs): View {
         val box = ui.vbox()
         val prev = ui.vbox().apply {
             background = ui.round(C.PURPLE_LIGHT, 20)
             setPadding(dp(20), dp(24), dp(20), dp(24))
         }
         prev.addView(
-            OverlayCard.build(this, OverlayCard.sample(prefs), prefs),
+            OverlayCard.build(this, OverlayCard.sample(p), p),
             LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).also { it.gravity = Gravity.CENTER_HORIZONTAL }
         )
         box.addView(prev)
         box.addView(ui.tv("Captura de Tela Automática", 20f, C.TEXT, 3, true), ui.lp(top = 20))
         box.addView(ui.tv("Salva na sua galeria uma captura de tela de cada corrida recebida", 14f, C.MUTED, 0, true), ui.lp(top = 6))
         box.addView(
-            ui.segmented(listOf("Desativado", "Ativado"), if (prefs.saveShots) 1 else 0) { prefs.saveShots = it == 1; render() },
+            ui.segmented(listOf("Desativado", "Ativado"), if (p.saveShots) 1 else 0) { p.saveShots = it == 1; render() },
             ui.lp(top = 18)
         )
         val note = ui.tv(
@@ -825,15 +931,11 @@ class MainActivity : Activity() {
 
     private fun wizardStep(i: Int): View {
         val content: View = when (i) {
-            0 -> appsContent()
-            1 -> goalsContent()
-            2 -> cardContent()
-            3 -> captureContent()
-            4 -> accessibilityContent()
-            5 -> notifContent()
-            6 -> batteryContent()
-            7 -> autostartContent { goStep(8) }
-            8 -> safetyContent { goStep(9) }
+            0 -> accessibilityContent()
+            1 -> notifContent()
+            2 -> batteryContent()
+            3 -> autostartContent { goStep(4) }
+            4 -> safetyContent { goStep(5) }
             else -> doneContent()
         }
 
@@ -879,7 +981,7 @@ class MainActivity : Activity() {
         box.addView(bigIcon("✓"), ui.lp(top = 24))
         box.addView(pageHeader("Tudo pronto!", "Abra o Uber ou o 99, fique online e o cartão do Rota aparece quando chegar uma oferta."), ui.lp(top = 16))
         val ok = isServiceEnabled()
-        box.addView(ui.statusPill(if (ok) "Leitura ativa" else "Falta ativar a leitura (passo 5)", ok))
+        box.addView(ui.statusPill(if (ok) "Leitura ativa" else "Falta ativar a leitura (passo 1)", ok))
         box.addView(ui.button("Testar o cartão agora") {
             val s = CopilotService.instance
             if (s == null) Toast.makeText(this, "Ative a leitura primeiro.", Toast.LENGTH_LONG).show()
@@ -887,6 +989,10 @@ class MainActivity : Activity() {
                 s.showSimulation()
                 Toast.makeText(this, "Saia do app: o cartão aparece por 6 segundos.", Toast.LENGTH_LONG).show()
             }
+        })
+        box.addView(ui.button("Configurar agora", false) {
+            closeWizard()
+            push { configMenu() }
         })
         box.addView(ui.button("Concluir", false) { closeWizard() })
         return box

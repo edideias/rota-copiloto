@@ -88,8 +88,25 @@ object Metrics {
 }
 
 /** Configurações salvas só no aparelho. */
-class Prefs(ctx: Context) {
-    private val sp = ctx.getSharedPreferences("copiloto", Context.MODE_PRIVATE)
+class Prefs(ctx: Context, override_: android.content.SharedPreferences? = null) {
+    val store: android.content.SharedPreferences =
+        override_ ?: ctx.getSharedPreferences("copiloto", Context.MODE_PRIVATE)
+    private val sp get() = store
+
+    /** Grava na loja real tudo o que está num rascunho (MemPrefs). */
+    fun commitFrom(draft: android.content.SharedPreferences) {
+        val e = store.edit()
+        for ((k, v) in draft.all) {
+            when (v) {
+                is String -> e.putString(k, v)
+                is Int -> e.putInt(k, v)
+                is Boolean -> e.putBoolean(k, v)
+                is Long -> e.putLong(k, v)
+                is Float -> e.putFloat(k, v)
+            }
+        }
+        e.apply()
+    }
 
     private fun d(k: String, def: Double): Double = sp.getString(k, null)?.toDoubleOrNull() ?: def
     private fun putD(k: String, v: Double) { sp.edit().putString(k, v.toString()).apply() }
@@ -150,6 +167,11 @@ class Prefs(ctx: Context) {
     var cardFont: Int
         get() = sp.getInt("cardFont", 18)
         set(v) { sp.edit().putInt("cardFont", v.coerceIn(12, 30)).apply() }
+
+    /** Segundos que o cartão fica na tela (0 = até tocar nele). */
+    var holdSec: Int
+        get() = sp.getInt("holdSec", 10)
+        set(v) { sp.edit().putInt("holdSec", v).apply() }
 
     var termsAccepted: Boolean
         get() = sp.getBoolean("termsAccepted", false)
