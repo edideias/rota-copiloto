@@ -312,8 +312,8 @@ class MainActivity : Activity() {
             ),
             ui.lp(top = 6)
         )
-        b.addView(ui.button("Abrir Acessibilidade") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
-        b.addView(ui.button("Abrir informações do app", false) { openAppDetails() })
+        b.addView(ui.button("Abrir configurações do app (liberar restritas)") { openAppDetails() })
+        b.addView(ui.button("Abrir Acessibilidade", false) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
         c.addView(b, ui.lp(top = 14))
         return screen("Ajuda", c)
     }
@@ -801,19 +801,21 @@ class MainActivity : Activity() {
         val ok = isServiceEnabled()
         box.addView(ui.statusPill(if (ok) "Permissão concedida" else "Leitura desligada", ok))
         if (!ok) {
-            box.addView(ui.button("Abrir Acessibilidade") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
-            box.addView(ui.tv("Se o Android disser \"configuração restrita\" (app instalado fora da Play Store):", 13f, C.MUTED, 0), ui.lp(top = 16))
+            box.addView(ui.tv("Passo A: liberar configurações restritas", 15f, C.TEXT, 2), ui.lp(top = 18))
+            box.addView(ui.tv("Necessário em apps instalados fora da Play Store. Se já liberou antes, pule para o passo B.", 12f, C.MUTED, 0))
+            box.addView(ui.button("Abrir configurações do app") { openAppDetails() })
             box.addView(
                 ui.numbered(
                     listOf(
-                        "Abra as informações do app",
                         "Toque no menu ⋮ no canto superior",
                         "Toque em \"Permitir configurações restritas\"",
-                        "Volte e ative o Rota Copiloto em Acessibilidade"
+                        "Confirme e volte para o Rota"
                     )
                 )
             )
-            box.addView(ui.button("Abrir informações do app", false) { openAppDetails() })
+            box.addView(ui.tv("Passo B: ativar a leitura", 15f, C.TEXT, 2), ui.lp(top = 22))
+            box.addView(ui.button("Abrir Acessibilidade") { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) })
+            box.addView(ui.tv("Na lista, toque em \"Rota Copiloto\" e ative.", 12f, C.MUTED, 0), ui.lp(top = 6))
         }
         return box
     }
