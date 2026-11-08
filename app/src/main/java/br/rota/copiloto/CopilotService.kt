@@ -75,6 +75,10 @@ class CopilotService : AccessibilityService() {
         if (platform == "99" && !prefs.use99) return
 
         val now = SystemClock.uptimeMillis()
+        if (platform == "99") {
+            lastTargetEvent = now
+            if (prefs.useOcr) ensureOcrLoop()
+        }
         if (now - lastRun < 250) return
         lastRun = now
 
@@ -99,6 +103,68 @@ class CopilotService : AccessibilityService() {
     }
 
     // ---------- leitura por imagem (OCR) ----------
+
+    // O 99 não avisa a acessibilidade quando a oferta aparece. Por isso, enquanto o 99
+    // estiver ativo, a leitura por imagem roda por tempo (a cada ~1,5 s), não por evento.
+    private var lastTargetEvent = 0L
+    private var ocrLoopRunning = false
+    private val ocrLoop = object : Runnable {
+        override fun run() {
+            val now = SystemClock.uptimeMillis()
+            if (prefs.enabled && prefs.use99 && prefs.useOcr && now - lastTargetEvent < 20000) {
+                tryOcr("99")
+                handler.postDelayed(this, 1500)
+            } else {
+                ocrLoopRunning = false
+            }
+        }
+    }
+
+    private fun ensureOcrLoop() {
+        if (ocrLoopRunning) return
+        ocrLoopRunning = true
+        handler.post(ocrLoop)
+    }
+
+    private var lastOcrNote = 0L
+    private var lastBrightness = ""
+
+    /** Mensagens do OCR com limite próprio (não somem atrás de outros avisos). */
+    private fun ocrNote(msg: String) {
+        val t = SystemClock.uptimeMillis()
+        if (t - lastOcrNote < 2000) return
+        lastOcrNote = t
+        DebugLog.add(msg)
+    }
+
+    private fun brightnessInfo(b: Bitmap): String {
+        var sum = 0L
+        var n = 0
+        val sx = maxOf(1, b.width / 20)
+        val sy = maxOf(1, b.height / 20)
+        var y = 0
+        while (y < b.height) {
+            var x = 0
+            while (x < b.width) {
+                val p = b.getPixel(x, y)
+                sum += ((p shr 16 and 0xFF) + (p shr 8 and 0xFF) + (p and 0xFF)) / 3
+                n++
+                x += sx
+            }
+            y += sy
+        }
+        return "imagem ${b.width}x${b.height}, brilho ${if (n > 0) sum / n else 0}"
+    }
+
+    private fun screenshotError(code: Int): String = when (code) {
+        1 -> "erro interno"
+        2 -> "sem permissão de acessibilidade"
+        3 -> "intervalo curto demais"
+        4 -> "tela inválida"
+        5 -> "janela inválida"
+        6 -> "janela protegida (o app bloqueia captura)"
+        else -> "código $code"
+    }
 
     private var lastOcr = 0L
     private var lastOcrLog = 0L
@@ -132,7 +198,7 @@ class CopilotService : AccessibilityService() {
                             if (hw == null) {
                                 hb.close()
                                 ocrBusy = false
-                                diag("OCR: não consegui montar a imagem da tela")
+                                ocrNote("OCR: não consegui montar a imagem da tela")
                                 return
                             }
                             val bmp = hw.copy(Bitmap.Config.ARGB_8888, false)
@@ -142,6 +208,7 @@ class CopilotService : AccessibilityService() {
                                 ocrBusy = false
                                 return
                             }
+                            lastBrightness = brightnessInfo(bmp)
                             recognizer.process(InputImage.fromBitmap(bmp, 0))
                                 .addOnSuccessListener { t ->
                                     ocrBusy = false
@@ -149,23 +216,23 @@ class CopilotService : AccessibilityService() {
                                 }
                                 .addOnFailureListener { e ->
                                     ocrBusy = false
-                                    diag("OCR falhou: ${e.message}")
+                                    ocrNote("OCR falhou: ${e.message}")
                                 }
                         } catch (e: Exception) {
                             ocrBusy = false
-                            diag("OCR erro: ${e.message}")
+                            ocrNote("OCR erro: ${e.message}")
                         }
                     }
 
                     override fun onFailure(errorCode: Int) {
                         ocrBusy = false
-                        diag("Screenshot recusado (código $errorCode). Se for 5, o app bloqueia captura de tela.")
+                        ocrNote("Screenshot recusado: ${screenshotError(errorCode)}")
                     }
                 }
             )
         } catch (e: Exception) {
             ocrBusy = false
-            diag("OCR não iniciou: ${e.message}")
+            ocrNote("OCR não iniciou: ${e.message}")
         }
     }
 
@@ -180,9 +247,10 @@ class CopilotService : AccessibilityService() {
         val joined = lines.joinToString(" | ")
 
         val t = SystemClock.uptimeMillis()
-        if (joined.contains("km", ignoreCase = true) && t - lastOcrLog > 3000) {
+        if (t - lastOcrLog > 2500) {
             lastOcrLog = t
-            DebugLog.add("[$platform] OCR: ${joined.take(600)}")
+            val size = if (joined.contains("km", ignoreCase = true)) 600 else 120
+            DebugLog.add("[$platform] OCR ($lastBrightness): ${joined.take(size)}")
         }
 
         val offer = OfferParser.parse(platform, joined) ?: return
@@ -193,6 +261,8 @@ class CopilotService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        handler.removeCallbacks(ocrLoop)
+        ocrLoopRunning = false
         hide()
         instance = null
         return super.onUnbind(intent)
