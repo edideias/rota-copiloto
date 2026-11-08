@@ -20,7 +20,10 @@ data class Analysis(
     val perKm: Double,
     val perHour: Double,      // -1 quando o tempo não foi lido
     val profit: Double,
-    val verdict: Verdict
+    val verdict: Verdict,
+    val profitPerHour: Double = -1.0,
+    val profitPct: Double = 0.0,
+    val perMin: Double = -1.0
 )
 
 object Calc {
@@ -39,7 +42,48 @@ object Calc {
             green -> Verdict.GREEN
             else -> Verdict.YELLOW
         }
-        return Analysis(o, km, min, perKm, perHour, profit, verdict)
+        val profitPerHour = if (hourKnown) profit / (min / 60.0) else -1.0
+        val profitPct = if (o.value > 0) profit / o.value * 100.0 else 0.0
+        val perMin = if (hourKnown) o.value / min else -1.0
+        return Analysis(o, km, min, perKm, perHour, profit, verdict, profitPerHour, profitPct, perMin)
+    }
+}
+
+/** Métricas que podem aparecer no cartão. */
+object Metrics {
+    val ALL = listOf("km", "hora", "lucrohora", "lucro", "lucropct", "min")
+
+    fun label(key: String) = when (key) {
+        "km" -> "\$/Km"
+        "hora" -> "\$/Hora"
+        "lucrohora" -> "Lucro/Hora"
+        "lucro" -> "Lucro"
+        "lucropct" -> "Lucro %"
+        else -> "\$/Min"
+    }
+
+    private val br = java.util.Locale("pt", "BR")
+
+    fun value(a: Analysis, key: String): String = when (key) {
+        "km" -> String.format(br, "%.2f", a.perKm)
+        "hora" -> if (a.perHour >= 0) String.format(br, "%.2f", a.perHour) else "--"
+        "lucrohora" -> if (a.perHour >= 0) String.format(br, "%.2f", a.profitPerHour) else "--"
+        "lucro" -> String.format(br, "%.2f", a.profit)
+        "lucropct" -> String.format(br, "%.0f%%", a.profitPct)
+        else -> if (a.perMin >= 0) String.format(br, "%.2f", a.perMin) else "--"
+    }
+
+    fun color(a: Analysis, key: String, p: Prefs): Int {
+        fun byKm(v: Double) = if (v >= p.greenKm) C.GOOD else if (v < p.yellowKm) C.BAD else C.MID
+        fun byHour(v: Double) = if (v >= p.greenHour) C.GOOD else if (v < p.yellowHour) C.BAD else C.MID
+        return when (key) {
+            "km" -> byKm(a.perKm)
+            "hora" -> if (a.perHour >= 0) byHour(a.perHour) else C.MUTED
+            "lucrohora" -> C.PURPLE
+            "lucro" -> if (a.profit > 0) C.GOOD else C.BAD
+            "lucropct" -> if (a.profitPct >= 50) C.GOOD else if (a.profitPct >= 30) C.MID else C.BAD
+            else -> if (a.perMin >= 0) byHour(a.perMin * 60.0) else C.MUTED
+        }
     }
 }
 
@@ -81,6 +125,32 @@ class Prefs(ctx: Context) {
     var useOcr: Boolean
         get() = sp.getBoolean("useOcr", true)
         set(v) { sp.edit().putBoolean("useOcr", v).apply() }
+    var calcEnabled: Boolean
+        get() = sp.getBoolean("calcEnabled", true)
+        set(v) { sp.edit().putBoolean("calcEnabled", v).apply() }
+    var saveShots: Boolean
+        get() = sp.getBoolean("saveShots", false)
+        set(v) { sp.edit().putBoolean("saveShots", v).apply() }
+    var wizardDone: Boolean
+        get() = sp.getBoolean("wizardDone", false)
+        set(v) { sp.edit().putBoolean("wizardDone", v).apply() }
+
+    /** Métricas do cartão, na ordem escolhida (1 a 4). */
+    var metrics: List<String>
+        get() = (sp.getString("metrics", null) ?: "km,hora").split(",").filter { it in Metrics.ALL }.ifEmpty { listOf("km", "hora") }
+        set(v) { sp.edit().putString("metrics", v.joinToString(",")).apply() }
+    /** 0 esquerda, 1 centro, 2 direita */
+    var cardPos: Int
+        get() = sp.getInt("cardPos", 1)
+        set(v) { sp.edit().putInt("cardPos", v).apply() }
+    /** 0 claro, 1 escuro, 2 cheio */
+    var cardTheme: Int
+        get() = sp.getInt("cardTheme", 1)
+        set(v) { sp.edit().putInt("cardTheme", v).apply() }
+    var cardFont: Int
+        get() = sp.getInt("cardFont", 18)
+        set(v) { sp.edit().putInt("cardFont", v.coerceIn(12, 30)).apply() }
+
     var termsAccepted: Boolean
         get() = sp.getBoolean("termsAccepted", false)
         set(v) { sp.edit().putBoolean("termsAccepted", v).apply() }

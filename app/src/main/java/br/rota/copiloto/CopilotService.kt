@@ -1,11 +1,13 @@
 package br.rota.copiloto
 
 import android.accessibilityservice.AccessibilityService
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.ContentValues
 import android.graphics.Bitmap
-import android.graphics.Color
 import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
+import android.provider.MediaStore
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -16,8 +18,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
-import android.widget.LinearLayout
-import android.widget.TextView
+import android.widget.FrameLayout
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -53,7 +54,6 @@ class CopilotService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private val hideRunnable = Runnable { hide() }
 
-    private var card: Card? = null
     private var lastRun = 0L
     private var lastSnapshot = ""
     private var lastSnapshotLog = 0L
@@ -70,7 +70,7 @@ class CopilotService : AccessibilityService() {
         val pkg = event?.packageName?.toString() ?: return
         DebugLog.seen(pkg)
         val platform = platformOf(pkg) ?: return
-        if (!prefs.enabled) return
+        if (!prefs.enabled || !prefs.calcEnabled) return
         if (platform == "Uber" && !prefs.useUber) return
         if (platform == "99" && !prefs.use99) return
 
@@ -111,7 +111,7 @@ class CopilotService : AccessibilityService() {
     private val ocrLoop = object : Runnable {
         override fun run() {
             val now = SystemClock.uptimeMillis()
-            if (prefs.enabled && prefs.use99 && prefs.useOcr && now - lastTargetEvent < 20000) {
+            if (prefs.enabled && prefs.calcEnabled && prefs.use99 && prefs.useOcr && now - lastTargetEvent < 20000) {
                 tryOcr("99")
                 handler.postDelayed(this, 1500)
             } else {
@@ -238,9 +238,11 @@ class CopilotService : AccessibilityService() {
 
     private fun onOcrText(platform: String, raw: String) {
         // Tira o que o próprio painel desenhou, para não ler a si mesmo.
+        val hm = Regex("""\d+\s*h\s*\d{1,2}\s*m""")
         val lines = raw.split("\n").filter { l ->
-            val s = l.lowercase()
-            !(s.contains("lucro est") ||
+            val s = l.lowercase().trim()
+            !(s.contains("lucro") || s.startsWith("$/") || s.startsWith("\$/") ||
+                hm.containsMatchIn(s) ||
                 (s.contains("/km") && s.contains("/h")) ||
                 s.contains("vale a pena") || s.contains("no limite") || s.contains("não compensa"))
         }
@@ -347,16 +349,26 @@ class CopilotService : AccessibilityService() {
 
     /** Mostra uma oferta de teste (botão "Testar painel"). */
     fun showSimulation() {
+        val p = Prefs(this)
         val offer = Offer("Simulação", 18.50, 1.2, 4.0, 6.8, 17.0)
-        show(Calc.analyze(offer, Prefs(this)), 6000L)
+        show(Calc.analyze(offer, p), 6000L)
     }
+
+    private var overlay: FrameLayout? = null
+    private var overlayLp: WindowManager.LayoutParams? = null
+    private var attached = false
+    private var lastOfferKey = ""
+    private var lastOfferAt = 0L
 
     private fun show(a: Analysis, holdMs: Long) {
         try {
-            val c = card ?: Card().also { card = it }
-            c.bind(a)
-            if (!c.attached) {
-                val lp = WindowManager.LayoutParams(
+            val box = overlay ?: FrameLayout(this).also { overlay = it }
+            box.removeAllViews()
+            box.addView(OverlayCard.build(this, a, prefs))
+
+            var lp = overlayLp
+            if (lp == null) {
+                lp = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.WRAP_CONTENT,
                     WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
@@ -365,13 +377,24 @@ class CopilotService : AccessibilityService() {
                         WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                     PixelFormat.TRANSLUCENT
                 )
-                lp.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                lp.y = dp(prefs.overlayTopDp.toInt())
-                wm.addView(c.root, lp)
-                c.attached = true
+                overlayLp = lp
+            }
+            lp.gravity = Gravity.TOP or when (prefs.cardPos) {
+                0 -> Gravity.START
+                2 -> Gravity.END
+                else -> Gravity.CENTER_HORIZONTAL
+            }
+            lp.x = dp(12)
+            lp.y = dp(prefs.overlayTopDp.toInt())
+            if (!attached) {
+                wm.addView(box, lp)
+                attached = true
+            } else {
+                wm.updateViewLayout(box, lp)
             }
             handler.removeCallbacks(hideRunnable)
             handler.postDelayed(hideRunnable, holdMs)
+            onOffer(a)
         } catch (e: Exception) {
             DebugLog.add("Erro ao mostrar painel: ${e.message}")
         }
@@ -379,60 +402,101 @@ class CopilotService : AccessibilityService() {
 
     private fun hide() {
         handler.removeCallbacks(hideRunnable)
-        val c = card ?: return
-        if (c.attached) {
-            try { wm.removeView(c.root) } catch (_: Exception) {}
-            c.attached = false
+        val box = overlay ?: return
+        if (attached) {
+            try { wm.removeView(box) } catch (_: Exception) {}
+            attached = false
+        }
+    }
+
+    /** Uma oferta nova (não a mesma lida de novo): notificação e captura de tela, se ligadas. */
+    private fun onOffer(a: Analysis) {
+        val o = a.offer
+        val key = "${o.platform}|${o.value}|${o.pickupKm}|${o.tripKm}"
+        val now = SystemClock.uptimeMillis()
+        if (key == lastOfferKey && now - lastOfferAt < 20000) return
+        lastOfferKey = key
+        lastOfferAt = now
+        notifyOffer(a)
+        if (o.platform != "Simulação") saveShot(o.platform)
+    }
+
+    private fun notifyOffer(a: Analysis) {
+        try {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel("ofertas", "Última oferta", NotificationManager.IMPORTANCE_LOW)
+            )
+            val br = Locale("pt", "BR")
+            val hour = if (a.perHour >= 0) String.format(br, "R\$ %.0f/h", a.perHour) else "—/h"
+            val n = Notification.Builder(this, "ofertas")
+                .setSmallIcon(android.R.drawable.ic_menu_compass)
+                .setContentTitle("${a.offer.platform} • " + fmt(a.offer.value))
+                .setContentText(String.format(br, "R\$ %.2f/km • ", a.perKm) + hour + String.format(br, " • lucro R\$ %.2f", a.profit))
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .build()
+            nm.notify(1, n)
+        } catch (_: Exception) {
+        }
+    }
+
+    private var lastShot = 0L
+
+    private fun saveShot(tag: String) {
+        if (!prefs.saveShots || Build.VERSION.SDK_INT < 30) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastShot < 8000) return
+        lastShot = now
+        handler.postDelayed({
+            try {
+                takeScreenshot(
+                    Display.DEFAULT_DISPLAY,
+                    mainExecutor,
+                    object : AccessibilityService.TakeScreenshotCallback {
+                        override fun onSuccess(result: AccessibilityService.ScreenshotResult) {
+                            try {
+                                val hb = result.hardwareBuffer
+                                val hw = Bitmap.wrapHardwareBuffer(hb, result.colorSpace)
+                                val bmp = hw?.copy(Bitmap.Config.ARGB_8888, false)
+                                hw?.recycle()
+                                hb.close()
+                                if (bmp != null) Thread { writeShot(bmp, tag) }.start()
+                            } catch (e: Exception) {
+                                DebugLog.add("Captura: ${e.message}")
+                            }
+                        }
+
+                        override fun onFailure(errorCode: Int) {
+                            DebugLog.add("Captura recusada: ${screenshotError(errorCode)}")
+                        }
+                    }
+                )
+            } catch (e: Exception) {
+                DebugLog.add("Captura não iniciou: ${e.message}")
+            }
+        }, 500)
+    }
+
+    private fun writeShot(bmp: Bitmap, tag: String) {
+        try {
+            val values = ContentValues().apply {
+                put(MediaStore.Images.Media.DISPLAY_NAME, "rota_${tag}_${System.currentTimeMillis()}.jpg")
+                put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/RotaCopiloto")
+                put(MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values) ?: return
+            contentResolver.openOutputStream(uri)?.use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+        } catch (e: Exception) {
+            DebugLog.add("Captura não salva: ${e.message}")
         }
     }
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun fmt(v: Double): String = String.format(Locale("pt", "BR"), "R$ %.2f", v)
-
-    /** Painel flutuante. */
-    private inner class Card {
-        var attached = false
-        val root = LinearLayout(this@CopilotService)
-        private val title = TextView(this@CopilotService)
-        private val line1 = TextView(this@CopilotService)
-        private val line2 = TextView(this@CopilotService)
-        private val bg = GradientDrawable()
-
-        init {
-            root.orientation = LinearLayout.VERTICAL
-            root.setPadding(dp(18), dp(10), dp(18), dp(10))
-            root.gravity = Gravity.CENTER_HORIZONTAL
-            bg.cornerRadius = dp(16).toFloat()
-            root.background = bg
-
-            title.textSize = 13f
-            title.typeface = Typeface.DEFAULT_BOLD
-            line1.textSize = 22f
-            line1.typeface = Typeface.DEFAULT_BOLD
-            line2.textSize = 13f
-            for (t in listOf(title, line1, line2)) {
-                t.gravity = Gravity.CENTER
-                root.addView(t)
-            }
-        }
-
-        fun bind(a: Analysis) {
-            val (color, textColor, label) = when (a.verdict) {
-                Verdict.GREEN -> Triple(Color.parseColor("#1B8F3A"), Color.WHITE, "VALE A PENA")
-                Verdict.YELLOW -> Triple(Color.parseColor("#F2B600"), Color.parseColor("#1A1A1A"), "NO LIMITE")
-                Verdict.RED -> Triple(Color.parseColor("#C62828"), Color.WHITE, "NÃO COMPENSA")
-            }
-            bg.setColor(color)
-            val loc = Locale("pt", "BR")
-            title.text = label
-            val hour = if (a.perHour >= 0) String.format(loc, "R$ %.0f/h", a.perHour) else "—/h"
-            line1.text = String.format(loc, "R$ %.2f/km  •  ", a.perKm) + hour
-            line2.text = String.format(
-                loc, "Lucro est. R$ %.2f  •  %.1f km  •  %.0f min",
-                a.profit, a.totalKm, a.totalMin
-            )
-            for (t in listOf(title, line1, line2)) t.setTextColor(textColor)
-        }
-    }
 }
