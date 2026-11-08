@@ -62,11 +62,8 @@ class CopilotService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         val pkg = event?.packageName?.toString() ?: return
-        val platform = when (pkg) {
-            "com.ubercab.driver" -> "Uber"
-            "com.app99.driver" -> "99"
-            else -> return
-        }
+        DebugLog.seen(pkg)
+        val platform = platformOf(pkg) ?: return
         if (!prefs.enabled) return
         if (platform == "Uber" && !prefs.useUber) return
         if (platform == "99" && !prefs.use99) return
@@ -75,12 +72,18 @@ class CopilotService : AccessibilityService() {
         if (now - lastRun < 250) return
         lastRun = now
 
-        val root = rootInActiveWindow ?: return
-        if (root.packageName?.toString() != pkg) return
+        val root = findRoot(pkg, event)
+        if (root == null) {
+            diag("[$platform] pkg=$pkg: não consegui abrir a janela do app")
+            return
+        }
 
         val texts = ArrayList<String>()
         collect(root, texts, 0)
-        if (texts.isEmpty()) return
+        if (texts.isEmpty()) {
+            diag("[$platform] pkg=$pkg: janela aberta, mas SEM NENHUM TEXTO (o app não expõe a tela)")
+            return
+        }
         val joined = texts.joinToString(" | ")
 
         logSnapshot(platform, joined)
@@ -118,8 +121,46 @@ class CopilotService : AccessibilityService() {
         }
     }
 
+    /** Aceita variações do nome do pacote (Uber Driver e 99 Motorista). */
+    private fun platformOf(pkg: String): String? {
+        val p = pkg.lowercase()
+        return when {
+            p.contains("uber") && p.contains("driver") -> "Uber"
+            p.contains("99") -> "99"
+            else -> null
+        }
+    }
+
+    private fun findRoot(pkg: String, event: AccessibilityEvent): AccessibilityNodeInfo? {
+        rootInActiveWindow?.let { if (it.packageName?.toString() == pkg) return it }
+        try {
+            for (w in windows) {
+                val r = w.root ?: continue
+                if (r.packageName?.toString() == pkg) return r
+            }
+        } catch (_: Exception) {}
+        return event.source
+    }
+
+    private var lastDiag = 0L
+    private var lastPlainLog = 0L
+
+    private fun diag(msg: String) {
+        val t = SystemClock.uptimeMillis()
+        if (t - lastDiag < 3000) return
+        lastDiag = t
+        DebugLog.add(msg)
+    }
+
     private fun logSnapshot(platform: String, joined: String) {
-        if (!joined.contains("R$")) return
+        if (!joined.contains("R$")) {
+            val t = SystemClock.uptimeMillis()
+            if (t - lastPlainLog > 4000) {
+                lastPlainLog = t
+                DebugLog.add("[$platform] tela sem R\$ (${joined.length} caracteres): ${joined.take(200)}")
+            }
+            return
+        }
         val now = SystemClock.uptimeMillis()
         if (joined == lastSnapshot || now - lastSnapshotLog < 2000) return
         lastSnapshot = joined

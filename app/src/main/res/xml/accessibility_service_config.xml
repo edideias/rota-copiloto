@@ -2,12 +2,12 @@
 <!--
   Serviço SOMENTE LEITURA: não declara canPerformGestures e o código nunca chama
   performAction. Ele não consegue tocar, rolar nem aceitar nada em outro app.
+  O código ignora qualquer app que não seja Uber Driver / 99 Motorista.
 -->
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged"
+    android:accessibilityEventTypes="typeWindowContentChanged|typeWindowStateChanged|typeViewTextChanged"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:accessibilityFlags="flagIncludeNotImportantViews"
+    android:accessibilityFlags="flagIncludeNotImportantViews|flagRetrieveInteractiveWindows"
     android:canRetrieveWindowContent="true"
-    android:notificationTimeout="200"
-    android:packageNames="com.ubercab.driver,com.app99.driver"
+    android:notificationTimeout="100"
     android:description="@string/service_description" />
