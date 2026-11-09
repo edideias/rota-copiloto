@@ -314,6 +314,27 @@ object OverlayCard {
         }
         outer.addView(row)
 
+        // Parada no caminho: borda vermelha piscante para chamar a atencao
+        val stops = a.offer.stops
+        if (stops > 0) {
+            val bgd = outer.background as GradientDrawable
+            bgd.setStroke(ui.dp(5), Color.rgb(255, 31, 31))
+            val anim = android.animation.ValueAnimator.ofInt(255, 30).apply {
+                duration = 450
+                repeatMode = android.animation.ValueAnimator.REVERSE
+                repeatCount = android.animation.ValueAnimator.INFINITE
+                addUpdateListener {
+                    val al = it.animatedValue as Int
+                    bgd.setStroke(ui.dp(5), Color.argb(al, 255, 31, 31))
+                }
+            }
+            outer.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) { if (!anim.isStarted) anim.start() }
+                override fun onViewDetachedFromWindow(v: View) { anim.cancel() }
+            })
+            anim.start()
+        }
+
         val totalRounded = Math.round(a.totalMin).toInt()
         val h = totalRounded / 60
         val m = totalRounded % 60
@@ -329,6 +350,13 @@ object OverlayCard {
             setPadding(ui.dp(5), ui.dp(1), ui.dp(5), ui.dp(1))
         })
         foot.addView(ui.tv(info, size * 0.8f, fg, 2).apply { setPadding(ui.dp(8), 0, 0, 0) })
+        if (stops > 0) {
+            val tag = ui.tv(if (stops == 1) "PARADA" else "$stops PARADAS", size * 0.5f, Color.WHITE, 3).apply {
+                background = ui.round(Color.rgb(224, 16, 16), 4)
+                setPadding(ui.dp(6), ui.dp(1), ui.dp(6), ui.dp(1))
+            }
+            foot.addView(tag, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also { it.marginStart = ui.dp(8) })
+        }
         outer.addView(foot, ui.lp(top = 4))
         return outer
     }

@@ -10,7 +10,8 @@ data class Offer(
     val pickupKm: Double,
     val pickupMin: Double,
     val tripKm: Double,
-    val tripMin: Double
+    val tripMin: Double,
+    val stops: Int = 0          // paradas no caminho (0 = nenhuma)
 )
 
 data class Analysis(
