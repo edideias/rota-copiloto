@@ -112,7 +112,7 @@ class CopilotService : AccessibilityService() {
             val now = SystemClock.uptimeMillis()
             if (prefs.enabled && prefs.calcEnabled && prefs.use99 && prefs.useOcr && now - lastTargetEvent < 20000) {
                 tryOcr("99")
-                handler.postDelayed(this, 1500)
+                handler.postDelayed(this, 450)
             } else {
                 ocrLoopRunning = false
             }
@@ -158,7 +158,7 @@ class CopilotService : AccessibilityService() {
     private fun screenshotError(code: Int): String = when (code) {
         1 -> "erro interno"
         2 -> "sem permissão de acessibilidade"
-        3 -> "intervalo curto demais"
+        3 -> "intervalo curto"
         4 -> "tela inválida"
         5 -> "janela inválida"
         6 -> "janela protegida (o app bloqueia captura)"
@@ -178,7 +178,7 @@ class CopilotService : AccessibilityService() {
         }
         val now = SystemClock.uptimeMillis()
         if (ocrBusy && now - lastOcr > 6000) ocrBusy = false
-        if (ocrBusy || now - lastOcr < 1200) return
+        if (ocrBusy || now - lastOcr < 400) return
         lastOcr = now
         ocrBusy = true
         if (!ocrAnnounced) {
@@ -208,7 +208,12 @@ class CopilotService : AccessibilityService() {
                                 return
                             }
                             lastBrightness = brightnessInfo(bmp)
-                            recognizer.process(InputImage.fromBitmap(bmp, 0))
+                            // So a parte de baixo (onde fica o painel da oferta) e em escala menor: OCR bem mais rapido.
+                            val y0 = if (platform == "99") (bmp.height * 0.25f).toInt() else 0
+                            val crop = Bitmap.createBitmap(bmp, 0, y0, bmp.width, bmp.height - y0)
+                            val small = Bitmap.createScaledBitmap(crop, (crop.width * 0.6f).toInt(), (crop.height * 0.6f).toInt(), true)
+                            if (crop !== bmp) bmp.recycle()
+                            recognizer.process(InputImage.fromBitmap(small, 0))
                                 .addOnSuccessListener { t ->
                                     ocrBusy = false
                                     onOcrText(platform, t.text)
@@ -225,7 +230,7 @@ class CopilotService : AccessibilityService() {
 
                     override fun onFailure(errorCode: Int) {
                         ocrBusy = false
-                        ocrNote("Screenshot recusado: ${screenshotError(errorCode)}")
+                        if (errorCode != 3) ocrNote("Screenshot recusado: ${screenshotError(errorCode)}")
                     }
                 }
             )
@@ -254,10 +259,27 @@ class CopilotService : AccessibilityService() {
             DebugLog.add("[$platform] OCR ($lastBrightness): ${joined.take(size)}")
         }
 
-        val offer = OfferParser.parse(platform, joined) ?: return
-        if (!(hasOfferButton(joined) || offer.pickupKm > 0.0)) return
+        val offer = OfferParser.parse(platform, joined)
+        if (offer == null || !(hasOfferButton(joined) || offer.pickupKm > 0.0)) {
+            // Sem oferta na tela: depois de alguns quadros seguidos, some com o painel antigo.
+            pendingKey = ""; pendingCount = 0
+            if (++noOfferFrames >= 4 && attached && !shownSimulated) hide()
+            return
+        }
+        noOfferFrames = 0
+        // So mostra quando a mesma leitura se repete em quadros seguidos (evita ler a oferta
+        // no meio da animacao) e, se faltar a busca ate o passageiro, espera ainda mais.
+        val key = "${offer.value}|${offer.pickupKm}|${offer.tripKm}"
+        if (key == pendingKey) pendingCount++ else { pendingKey = key; pendingCount = 1 }
+        val need = if (offer.pickupKm > 0.0) 2 else 4
+        if (pendingCount < need) return
         show(Calc.analyze(offer, prefs), -1L)
     }
+
+    private var pendingKey = ""
+    private var pendingCount = 0
+    private var noOfferFrames = 0
+    private var shownSimulated = false
 
     override fun onInterrupt() {}
 
@@ -384,6 +406,7 @@ class CopilotService : AccessibilityService() {
                 if (attached && key == shownKey) return // mesma oferta, já na tela
             }
             shownKey = key
+            shownSimulated = simulated
 
             val box = overlay ?: FrameLayout(this).also { overlay = it }
             box.removeAllViews()

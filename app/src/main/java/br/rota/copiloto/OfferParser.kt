@@ -111,7 +111,11 @@ object OfferParser {
     }
 
     /** Primeiro valor em R$ que não seja "por km" / "por hora". */
+    private val acceptRx = Regex("""aceitar\s*por\s*R\$\s*(\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+(?:,\d{1,2})?)""", RegexOption.IGNORE_CASE)
+
     private fun readValue(text: String): Double? {
+        // "Aceitar por R$17,19" e o valor real da oferta: tem prioridade sobre qualquer outro R$.
+        acceptRx.find(text)?.groupValues?.get(1)?.replace(".", "")?.replace(",", ".")?.toDoubleOrNull()?.let { if (it > 0.0) return it }
         for (m in moneyRx.findAll(text)) {
             val after = text.substring(m.range.last + 1, minOf(text.length, m.range.last + 9)).lowercase()
             if (after.contains("/km") || after.contains("/h") || after.trimStart().startsWith("por ")) continue
